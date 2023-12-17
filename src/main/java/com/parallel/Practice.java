@@ -2,13 +2,26 @@ package com.parallel;
 
 import java.util.LinkedList;
 import java.util.Queue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class Practice {
+
     private final Queue<Patient> waitingPatients = new LinkedList<>();
+    private final Lock waitingPatientsLock = new ReentrantLock();
+    private final Condition areTherePatientsInWaitingRoom = waitingPatientsLock.newCondition();
+
     private final Queue<Patient> patientsWaitingForDoctor = new LinkedList<>();
+    private final Lock patientsWaitingForDoctorLock = new ReentrantLock();
+    private final Condition areTherePatientsWaitingForDoctor = patientsWaitingForDoctorLock.newCondition();
 
     private final MedicalAssistant[] medicalAssistants;
     private final RoomManager roomManager;
+
+    private final ExecutorService practiceExecutorService;
 
     private int numPatients = 0;
 
@@ -17,50 +30,75 @@ public class Practice {
     public Practice(int numRooms, int numMedicalAssistants) {
         this.roomManager = new RoomManager(numRooms);
 
+        this.practiceExecutorService = Executors.newCachedThreadPool();
+
         this.medicalAssistants = new MedicalAssistant[numMedicalAssistants];
         for (int i = 0; i < numMedicalAssistants; i++) {
             this.medicalAssistants[i] = new MedicalAssistant(this);
+            practiceExecutorService.submit(this.medicalAssistants[i]);
         }
 
         this.doctor = new Doctor(this);
+        practiceExecutorService.submit(this.doctor);
 
-        // Start the threads
-        for (MedicalAssistant medicalAssistant : medicalAssistants) {
-            new Thread(medicalAssistant).start();
+        practiceExecutorService.shutdown();
+    }
+
+    public void arrive(Patient patient) throws InterruptedException {
+        try {
+            waitingPatientsLock.lock();
+            waitingPatients.add(patient);
+            numPatients++;
+            areTherePatientsInWaitingRoom.signalAll();
+        } finally {
+            waitingPatientsLock.unlock();
         }
-        new Thread(doctor).start();
     }
 
-    public synchronized void arrive(Patient patient) throws InterruptedException {
-        numPatients++;
-        waitingPatients.add(patient);
-        notifyAll();
-    }
-
-    public synchronized Patient getNextPatientForExamination() throws InterruptedException {
-        while (waitingPatients.isEmpty()) {
-            wait();
+    public Patient getNextPatientForExamination() throws InterruptedException {
+        waitingPatientsLock.lock();
+        try {
+            while (waitingPatients.isEmpty()) {
+                areTherePatientsInWaitingRoom.await();
+            }
+            return waitingPatients.poll();
+        } finally {
+            waitingPatientsLock.unlock();
         }
-        return waitingPatients.poll();
     }
 
-    public synchronized void waitForDoctor(Patient patient) throws InterruptedException {
-        patientsWaitingForDoctor.add(patient);
-
-        // Notify the doctor that there is a patient waiting for him
-        notifyAll();
-    }
-
-    public synchronized Patient getNextPatientForTreatment() throws InterruptedException {
-        while (patientsWaitingForDoctor.isEmpty()) {
-            wait();
+    public void waitForDoctor(Patient patient) throws InterruptedException {
+        try {
+            patientsWaitingForDoctorLock.lock();
+            patientsWaitingForDoctor.add(patient);
+            areTherePatientsWaitingForDoctor.signal();
+        } finally {
+            patientsWaitingForDoctorLock.unlock();
         }
-        return patientsWaitingForDoctor.poll();
     }
 
-    public synchronized void leave(Patient patient) {
+    public Patient getNextPatientForTreatment() throws InterruptedException {
+        patientsWaitingForDoctorLock.lock();
+        try {
+            while (patientsWaitingForDoctor.isEmpty()) {
+                areTherePatientsWaitingForDoctor.await();
+            }
+            return patientsWaitingForDoctor.poll();
+        } finally {
+            patientsWaitingForDoctorLock.unlock();
+        }
+    }
+
+    public void leave(Patient patient) {
         roomManager.leaveRoom(patient);
-        numPatients--;
+
+        try {
+            patientsWaitingForDoctorLock.lock();
+            numPatients--;
+        } finally {
+            patientsWaitingForDoctorLock.unlock();
+        }
+
         Logger.log("Patient " + patient.getId() + " has left the practice");
     }
 

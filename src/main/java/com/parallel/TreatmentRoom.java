@@ -18,7 +18,7 @@ public class TreatmentRoom {
     }
 
     /// Use the treatment room.
-    public synchronized void assignPatient(Patient patient) {
+    public void assignPatient(Patient patient) {
         this.isAvailable = false;
         this.patient = patient;
 
@@ -26,13 +26,13 @@ public class TreatmentRoom {
     }
 
     /// Leave the treatment room.
-    public synchronized void leave() {
+    public void leave() {
         this.isAvailable = true;
         this.patient = null;
     }
 
     /// Returns whether the treatment room is available or not.
-    public synchronized boolean getIsAvailable() {
+    public boolean getIsAvailable() {
         return this.isAvailable;
     }
 
